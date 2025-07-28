@@ -8,6 +8,11 @@ import streamlit as st
     from tensorflow.keras.layers import LSTM, Dense
     import plotly.graph_objs as go
     from datetime import datetime, timedelta
+    import logging
+
+    # Configure logging for debugging
+    logging.basicConfig(level=logging.INFO)
+    logger = logging.getLogger(__name__)
 
     # Streamlit app configuration
     st.set_page_config(page_title="Bitcoin Price Predictor", layout="wide")
@@ -21,17 +26,23 @@ import streamlit as st
     # Function to fetch data from yfinance
     def fetch_yfinance_data(start_date, end_date):
         try:
+            logger.info(f"Fetching yfinance data for BTC-USD from {start_date} to {end_date}")
             data = yf.download('BTC-USD', start=start_date, end=end_date, interval='1d')
             if data.empty:
+                logger.warning("yfinance returned empty data")
                 return None
-            return data['Close'].values.reshape(-1, 1)
+            prices = data['Close'].values.reshape(-1, 1)
+            logger.info(f"yfinance fetched {len(prices)} samples")
+            return prices
         except Exception as e:
+            logger.error(f"yfinance failed: {str(e)}")
             st.warning(f"yfinance failed: {str(e)}")
             return None
 
     # Function to fetch data from CoinGecko
     def fetch_coingecko_data(start_date, end_date):
         try:
+            logger.info(f"Fetching CoinGecko data for bitcoin from {start_date} to {end_date}")
             cg = CoinGeckoAPI()
             start_timestamp = int(datetime.strptime(start_date, '%Y-%m-%d').timestamp())
             end_timestamp = int(datetime.strptime(end_date, '%Y-%m-%d').timestamp())
@@ -40,21 +51,40 @@ import streamlit as st
             )
             prices = [item[1] for item in data['prices']]
             if not prices:
+                logger.warning("CoinGecko returned empty data")
                 return None
-            return np.array(prices).reshape(-1, 1)
+            prices = np.array(prices).reshape(-1, 1)
+            logger.info(f"CoinGecko fetched {len(prices)} samples")
+            return prices
         except Exception as e:
+            logger.error(f"CoinGecko failed: {str(e)}")
             st.warning(f"CoinGecko failed: {str(e)}")
             return None
+
+    # Mock data as last resort for testing
+    def fetch_mock_data():
+        logger.info("Using mock data as fallback")
+        st.warning("Using mock data due to failure in fetching real data. Predictions may not reflect real market conditions.")
+        # Generate synthetic data (e.g., linear trend with noise)
+        dates = pd.date_range(end=datetime.now(), periods=730, freq='D')
+        prices = np.linspace(30000, 60000, 730) + np.random.normal(0, 1000, 730)
+        return prices.reshape(-1, 1)
 
     # Combined data fetching function with fallback
     @st.cache_data
     def fetch_data(start_date, end_date):
         prices = fetch_yfinance_data(start_date, end_date)
         if prices is None or len(prices) == 0:
+            logger.info("Falling back to CoinGecko API")
             st.info("Falling back to CoinGecko API for data retrieval.")
             prices = fetch_coingecko_data(start_date, end_date)
         if prices is None or len(prices) == 0:
-            st.error("Failed to fetch Bitcoin price data from both yfinance and CoinGecko. Please try again later.")
+            logger.info("Falling back to mock data")
+            st.info("Falling back to mock data due to API failures.")
+            prices = fetch_mock_data()
+        if prices is None or len(prices) == 0:
+            logger.error("All data fetching attempts failed")
+            st.error("Failed to fetch Bitcoin price data from all sources. Please try again later.")
             st.stop()
         return prices
 
@@ -100,6 +130,10 @@ import streamlit as st
         with st.spinner("Fetching Bitcoin price data..."):
             prices = fetch_data(start_date, end_date)
 
+        # Debug: Display data shape
+        logger.info(f"Prices shape: {prices.shape}")
+        st.write(f"DEBUG: Fetched {prices.shape[0]} data points")
+
         # Preprocess data
         scaler = MinMaxScaler()
         prices_scaled = scaler.fit_transform(prices)
@@ -115,14 +149,21 @@ import streamlit as st
             pred_prices = predict_prices(model, scaler, prices_scaled, seq_length, horizon)
 
         # Prepare data for visualization
-        cg = CoinGeckoAPI()
-        historical_data = cg.get_coin_market_chart_range_by_id(
-            id='bitcoin', vs_currency='usd',
-            from_timestamp=int((datetime.now() - timedelta(days=100)).timestamp()),
-            to_timestamp=int(datetime.now().timestamp())
-        )
-        historical_dates = [datetime.fromtimestamp(item[0] / 1000) for item in historical_data['prices'][-100:]]
-        historical_prices = [item[1] for item in historical_data['prices'][-100:]]
+        try:
+            cg = CoinGeckoAPI()
+            historical_data = cg.get_coin_market_chart_range_by_id(
+                id='bitcoin', vs_currency='usd',
+                from_timestamp=int((datetime.now() - timedelta(days=100)).timestamp()),
+                to_timestamp=int(datetime.now().timestamp())
+            )
+            historical_dates = [datetime.fromtimestamp(item[0] / 1000) for item in historical_data['prices'][-100:]]
+            historical_prices = [item[1] for item in historical_data['prices'][-100:]]
+        except Exception as e:
+            logger.error(f"Failed to fetch visualization data from CoinGecko: {str(e)}")
+            st.warning("Using mock data for visualization due to API failure.")
+            historical_dates = pd.date_range(end=datetime.now(), periods=100, freq='D')
+            historical_prices = prices[-100:].flatten()
+
         pred_dates = [datetime.now() + timedelta(days=i) for i in range(1, horizon + 1)]
 
         # Plot historical and predicted prices

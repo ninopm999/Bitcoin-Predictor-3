@@ -17,15 +17,6 @@ logger = logging.getLogger(__name__)
 # Streamlit app configuration
 st.set_page_config(page_title="Bitcoin Price Predictor", layout="wide")
 
-# Health check endpoint for Streamlit Cloud
-def health_check():
-    return {"status": "ok"}
-
-# Expose health check via Streamlit
-if "health_check" in st.query_params:
-    st.json(health_check())
-    st.stop()
-
 # Title and description
 st.title("Bitcoin Price Predictor")
 st.markdown("""
@@ -74,10 +65,9 @@ def fetch_coingecko_data(start_date, end_date):
 def fetch_mock_data():
     logger.info("Using mock data as fallback")
     st.warning("Using mock data due to failure in fetching real data. Predictions may not reflect real market conditions.")
-    # Generate synthetic data based on recent Bitcoin trends (e.g., ~$60k-$70k range with volatility)
-    dates = pd.date_range(end=datetime.now(), periods=365, freq='D')
-    base_price = 65000  # Approximate recent Bitcoin price
-    prices = base_price + np.random.normal(0, 2000, 365) * np.sin(np.linspace(0, 10, 365))
+    # Generate synthetic data (e.g., linear trend with noise)
+    dates = pd.date_range(end=datetime.now(), periods=730, freq='D')
+    prices = np.linspace(30000, 60000, 730) + np.random.normal(0, 1000, 730)
     return prices.reshape(-1, 1)
 
 # Combined data fetching function with fallback
@@ -126,7 +116,7 @@ def predict_prices(model, scaler, recent_data, seq_length, horizon):
         pred = model.predict(input_seq, verbose=0)
         predictions.append(pred[0, 0])
         input_seq = np.roll(input_seq, -1, axis=1)
-        input_seq[0, -1, 0] = pred.item()  # Extract scalar value to avoid DeprecationWarning
+        input_seq[0, -1, 0] = pred
     return scaler.inverse_transform(np.array(predictions).reshape(-1, 1))
 
 # Main app logic
@@ -134,9 +124,9 @@ def main():
     # User input for prediction horizon
     horizon = st.slider("Select Prediction Horizon (days)", 1, 30, 7)
 
-    # Fetch historical data (365 days to comply with CoinGecko free tier)
+    # Fetch historical data
     end_date = datetime.now().strftime('%Y-%m-%d')
-    start_date = (datetime.now() - timedelta(days=365)).strftime('%Y-%m-%d')
+    start_date = (datetime.now() - timedelta(days=730)).strftime('%Y-%m-%d')
     with st.spinner("Fetching Bitcoin price data..."):
         prices = fetch_data(start_date, end_date)
 
